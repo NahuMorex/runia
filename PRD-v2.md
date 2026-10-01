@@ -1,6 +1,6 @@
 # PRD-001: Runnia — Software de entrenamiento para running
 ## Contexto y Problema
-Internet se encuentra plagado -más precisamente en redes sociales- de todo tipo de rutinas y planes para realizar un mismo objetivo de entrenamiento, y es normal encontrarte con opiniones diferentes que se contradigan, dificultando saber qué hacer, cuándo y cómo. Se necesita un sistema que, en base a las capacidades físicas del usuario, indique los pasos a seguir con respaldo técnico, permitiendo entrenar con seguridad y sin temor a lesiones.
+Internet se encuentra plagado -más precisamente en redes sociales- de todo tipo de rutinas y planes para realizar un mismo objetivo de entrenamiento, y es normal encontrarte con opiniones diferentes que se contradigan, dificultando saber qué hacer, cuándo y cómo. Se necesita un sistema que, en base a las capacidades físicas del usuario, indique los pasos a seguir con respaldo técnico, permitiendo entrenar con seguridad y sin tenerle temor a lesionarse.
 Personas:
 - Milena (Corredora novata): tiene pensado correr por primera vez 10 kilómetros, pero nunca corrió. Quiere saber cuáles son los pasos a seguir y cómo prepararse sin lesionarse.
 - Mich (Corredor avanzado): no sabe qué tipo de ejercicio hacer para mejorar su velocidad y ritmo. Quiere saber qué rutina seguir según su nivel actual.
