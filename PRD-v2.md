@@ -66,7 +66,7 @@ Luego de que un usuario suba sus métricas de salud, historial y objetivos, se v
 - AC-24 (RF-13): Dado que se acumulan 2 o más sesiones con estado "Pospuesta por clima" en la misma semana, cuando el sistema emite el mensaje diario, entonces informa explícitamente al usuario la cantidad de sesiones pospuestas de esa semana.
 
 ## Fuera de Alcance
-Integración nativa directa con hardware vía Bluetooth. · Diagnóstico médico, prescripción kinesiológica o tratamiento de lesiones. · Desarrollo de aplicaciones móviles. · Elaboración de planes de nutrición o dietas personalizadas. · Pasarelas de pago o cobro recurrente de suscripciones.
+Integración nativa directa con hardware vía Bluetooth. · Diagnóstico médico, tratamiento de lesiones o prescripción kinesiológica. · Desarrollo de aplicaciones móviles. · Elaboración de planes de nutrición o dietas personalizadas. · Pasarelas de pago o cobro recurrente de suscripciones.
 
 ## Riesgos y Dependencias
 - Dependencia: API meteorológica · OpenWeatherMap.
