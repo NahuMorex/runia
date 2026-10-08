@@ -1,7 +1,7 @@
 # AGENTS.md
 
 ## Propósito
-Runnia es una API con bot de Telegram que arma planes semanales de entrenamiento para running según el nivel y los objetivos del corredor.
+Runia es una API con bot de Telegram que arma planes semanales de entrenamiento para running según el nivel y los objetivos del corredor.
 El plan lo genera un agente con Gemini, que ajusta la sesión diaria por clima (OpenWeatherMap) y la envía por Telegram.
 
 ## Stack

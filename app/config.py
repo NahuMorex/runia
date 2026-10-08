@@ -2,7 +2,7 @@
 
 import os
 
-DEFAULT_DB_PATH = "runnia.db"
+DEFAULT_DB_PATH = "runia.db"
 TIMEZONE = "America/Argentina/Buenos_Aires"
 GEMINI_MODEL = "gemini-3.5-flash-lite"
 
@@ -32,4 +32,4 @@ def jwt_secret() -> str:
 
 
 def db_path() -> str:
-    return os.environ.get("RUNNIA_DB_PATH", DEFAULT_DB_PATH)
+    return os.environ.get("RUNIA_DB_PATH", DEFAULT_DB_PATH)

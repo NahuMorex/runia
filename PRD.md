@@ -1,4 +1,4 @@
-# PRD-001: Runnia — Software de entrenamiento para running
+# PRD-001: Runia — Software de entrenamiento para running
 ## Contexto y Problema
 Internet se encuentra plagado -más precisamente en redes sociales- de todo tipo de rutinas y planes para realizar un mismo objetivo de entrenamiento, y es normal encontrarte con opiniones diferentes que se contradigan, dificultando saber qué hacer, cuándo y cómo. Se necesita un sistema que, en base a las capacidades físicas del usuario, indique los pasos a seguir con respaldo técnico, permitiendo entrenar con seguridad y sin tenerle temor a lesionarse.
 Personas:

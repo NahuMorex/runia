@@ -11,7 +11,7 @@ from app.linking import LinkResult, redeem_link_code
 from app.log import log_event
 
 START_TEXT = (
-    "Hola, soy Runnia. Para vincular este chat con tu cuenta, generá un código "
+    "Hola, soy Runia. Para vincular este chat con tu cuenta, generá un código "
     "desde la API y enviame: /vincular CODIGO"
 )
 LINK_USAGE_TEXT = "Enviame el código así: /vincular CODIGO"

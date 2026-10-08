@@ -5,7 +5,7 @@ import logging
 import sys
 from datetime import datetime, timezone
 
-LOGGER_NAME = "runnia"
+LOGGER_NAME = "runia"
 # RNF-02: no se registran contraseñas ni tokens.
 SENSITIVE_KEYS = ("password", "token", "secret", "api_key")
 REDACTED = "[redactado]"

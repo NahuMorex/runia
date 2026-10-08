@@ -1,4 +1,4 @@
-"""Punto de entrada: API de Runnia y bot de Telegram en el mismo proceso."""
+"""Punto de entrada: API de Runia y bot de Telegram en el mismo proceso."""
 
 import logging
 import os
@@ -30,7 +30,7 @@ async def lifespan(app: FastAPI):
     log_event("app_stop")
 
 
-app = FastAPI(title="Runnia", lifespan=lifespan)
+app = FastAPI(title="Runia", lifespan=lifespan)
 app.include_router(auth_router)
 app.include_router(profile_router)
 app.include_router(linking_router)

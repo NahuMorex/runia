@@ -7,7 +7,7 @@ from app.main import app
 @pytest.fixture(autouse=True)
 def env(tmp_path, monkeypatch):
     """Cada test usa su propia base y secretos de prueba; nunca los reales."""
-    monkeypatch.setenv("RUNNIA_DB_PATH", str(tmp_path / "test.db"))
+    monkeypatch.setenv("RUNIA_DB_PATH", str(tmp_path / "test.db"))
     monkeypatch.setenv("JWT_SECRET", "secreto-de-prueba-de-al-menos-32-bytes")
     monkeypatch.setenv("GOOGLE_API_KEY", "test-google")
     # Sin token de Telegram la app no levanta el bot: los tests no salen a la red.
