@@ -4,6 +4,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
+from app.auth import router as auth_router
 from app.db import init_db
 from app.log import log_event
 
@@ -17,3 +18,4 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="Runnia", lifespan=lifespan)
+app.include_router(auth_router)

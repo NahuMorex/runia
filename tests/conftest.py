@@ -1,4 +1,7 @@
 import pytest
+from fastapi.testclient import TestClient
+
+from app.main import app
 
 
 @pytest.fixture(autouse=True)
@@ -9,3 +12,9 @@ def env(tmp_path, monkeypatch):
     monkeypatch.setenv("GOOGLE_API_KEY", "test-google")
     monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "test-telegram")
     monkeypatch.setenv("OPENWEATHER_API_KEY", "test-openweather")
+
+
+@pytest.fixture
+def client(env):
+    with TestClient(app) as c:
+        yield c
