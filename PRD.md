@@ -153,7 +153,8 @@ Integración nativa directa con hardware vía Bluetooth. · Diagnóstico médico
 
 ## Riesgos y Dependencias
 - Dependencia: API meteorológica · OpenWeatherMap.
-- Dependencia: API de Gemini (`gemini-3.5-flash-lite`) · SQLite.
+- Dependencia: API de Gemini (`gemini-3.5-flash-lite`).
+- Dependencia: SQLite.
 - Dependencia: API de bots de Telegram.
 - Riesgo: Que el LLM sugiera cargas de entrenamiento excesivas para novatos -> mitigación: agregar guardarraíles duros previos a la entrega del plan.
 - Riesgo: Consumo excesivo de tokens al pasar historiales largos de entrenamientos -> mitigación: el prompt solo incluye resúmenes semanales y no sesiones individuales.
