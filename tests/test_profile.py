@@ -15,30 +15,22 @@ PERFIL = {
 VACIO = dict.fromkeys(PERFIL)
 
 
-def auth(client, email="pepe@example.com"):
-    """Registra un usuario y devuelve los headers con su token."""
-    credenciales = {"email": email, "password": "correr10km"}
-    client.post("/register", json=credenciales)
-    token = client.post("/login", json=credenciales).json()["access_token"]
-    return {"Authorization": f"Bearer {token}"}
-
-
-def test_un_usuario_nuevo_tiene_el_perfil_vacio(client):
-    r = client.get("/profile", headers=auth(client))
+def test_un_usuario_nuevo_tiene_el_perfil_vacio(client, auth):
+    r = client.get("/profile", headers=auth())
     assert r.status_code == 200 and r.json() == VACIO
 
 
 # AC-06
-def test_put_con_datos_validos_persiste_y_devuelve_200(client):
-    headers = auth(client)
+def test_put_con_datos_validos_persiste_y_devuelve_200(client, auth):
+    headers = auth()
     r = client.put("/profile", json=PERFIL, headers=headers)
     assert r.status_code == 200 and r.json() == PERFIL
     assert client.get("/profile", headers=headers).json() == PERFIL
 
 
 # AC-06: el novato no necesita ritmo actual.
-def test_put_de_novato_sin_ritmo_es_valido(client):
-    headers = auth(client)
+def test_put_de_novato_sin_ritmo_es_valido(client, auth):
+    headers = auth()
     novato = {**PERFIL, "level": "novato"}
     del novato["pace"]
     assert client.put("/profile", json=novato, headers=headers).status_code == 200
@@ -60,12 +52,12 @@ def test_put_de_novato_sin_ritmo_es_valido(client):
         {"window_start": "00:00", "window_end": "23:59", "send_time": "23:58"},
     ],
 )
-def test_put_acepta_los_valores_limite(client, cambio):
-    assert client.put("/profile", json={**PERFIL, **cambio}, headers=auth(client)).status_code == 200
+def test_put_acepta_los_valores_limite(client, auth, cambio):
+    assert client.put("/profile", json={**PERFIL, **cambio}, headers=auth()).status_code == 200
 
 
-def test_el_ritmo_se_devuelve_normalizado(client):
-    r = client.put("/profile", json={"pace": "05:07"}, headers=auth(client))
+def test_el_ritmo_se_devuelve_normalizado(client, auth):
+    r = client.put("/profile", json={"pace": "05:07"}, headers=auth())
     assert r.json()["pace"] == "5:07"
 
 
@@ -103,8 +95,8 @@ def test_el_ritmo_se_devuelve_normalizado(client):
         {"apodo": "Pepe"},
     ],
 )
-def test_put_con_un_dato_invalido_devuelve_422_sin_persistir_nada(client, cambio):
-    headers = auth(client)
+def test_put_con_un_dato_invalido_devuelve_422_sin_persistir_nada(client, auth, cambio):
+    headers = auth()
     r = client.put("/profile", json={**PERFIL, **cambio}, headers=headers)
     assert r.status_code == 422
     assert client.get("/profile", headers=headers).json() == VACIO
@@ -115,16 +107,16 @@ def test_put_con_un_dato_invalido_devuelve_422_sin_persistir_nada(client, cambio
     "cambio",
     [{"window_end": "07:30"}, {"window_start": "08:30"}, {"send_time": "09:30"}, {"window_end": "06:30"}],
 )
-def test_put_parcial_que_rompe_los_horarios_guardados_devuelve_422(client, cambio):
-    headers = auth(client)
+def test_put_parcial_que_rompe_los_horarios_guardados_devuelve_422(client, auth, cambio):
+    headers = auth()
     client.put("/profile", json=PERFIL, headers=headers)
     assert client.put("/profile", json=cambio, headers=headers).status_code == 422
     assert client.get("/profile", headers=headers).json() == PERFIL
 
 
 # AC-51
-def test_editar_el_perfil_devuelve_los_valores_nuevos(client):
-    headers = auth(client)
+def test_editar_el_perfil_devuelve_los_valores_nuevos(client, auth):
+    headers = auth()
     client.put("/profile", json=PERFIL, headers=headers)
     nuevo = {
         "level": "avanzado",
@@ -141,8 +133,8 @@ def test_editar_el_perfil_devuelve_los_valores_nuevos(client):
 
 
 # AC-51: los campos que no se envían conservan su valor.
-def test_put_parcial_conserva_los_demas_campos(client):
-    headers = auth(client)
+def test_put_parcial_conserva_los_demas_campos(client, auth):
+    headers = auth()
     client.put("/profile", json=PERFIL, headers=headers)
     r = client.put("/profile", json={"city": "Mendoza"}, headers=headers)
     assert r.status_code == 200
@@ -150,16 +142,16 @@ def test_put_parcial_conserva_los_demas_campos(client):
 
 
 # AC-55
-def test_bajar_a_novato_no_tiene_restricciones(client):
-    headers = auth(client)
+def test_bajar_a_novato_no_tiene_restricciones(client, auth):
+    headers = auth()
     client.put("/profile", json=PERFIL, headers=headers)
     assert client.put("/profile", json={"level": "novato"}, headers=headers).status_code == 200
     assert client.get("/profile", headers=headers).json()["level"] == "novato"
 
 
 # AC-37: cada usuario solo ve y modifica su propio perfil.
-def test_el_perfil_es_el_del_usuario_del_token(client):
-    pepe, mich = auth(client), auth(client, "mich@example.com")
+def test_el_perfil_es_el_del_usuario_del_token(client, auth):
+    pepe, mich = auth(), auth("mich@example.com")
     client.put("/profile", json=PERFIL, headers=pepe)
     assert client.get("/profile", headers=mich).json() == VACIO
     client.put("/profile", json={"city": "Salta"}, headers=mich)
@@ -168,11 +160,11 @@ def test_el_perfil_es_el_del_usuario_del_token(client):
 
 # AC-73
 @pytest.mark.parametrize("metodo", ["get", "put"])
-def test_el_perfil_exige_token(client, metodo):
+def test_el_perfil_exige_token(client, auth, metodo):
     r = client.request(metodo, "/profile", json=PERFIL)
     assert r.status_code == 401 and "level" not in r.json()
 
 
 # AC-05
-def test_el_perfil_devuelve_el_token_renovado(client):
-    assert RENEWED_TOKEN_HEADER in client.get("/profile", headers=auth(client)).headers
+def test_el_perfil_devuelve_el_token_renovado(client, auth):
+    assert RENEWED_TOKEN_HEADER in client.get("/profile", headers=auth()).headers

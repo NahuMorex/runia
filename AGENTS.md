@@ -15,9 +15,9 @@ El plan lo genera un agente con Gemini, que ajusta la sesión diaria por clima (
 
 ## Cómo correr
 - Instalar: `uv sync`
-- Levantar API + bot: `uv run uvicorn app.main:app --reload`
+- Levantar API + bot: `uv run --env-file .env uvicorn app.main:app --reload` (la app no lee el `.env` sola; sin `TELEGRAM_BOT_TOKEN` levanta la API sin el bot)
 - Tests: `uv run pytest` (uno solo: `uv run pytest tests/test_x.py::test_y`)
-- Variables de entorno: `GOOGLE_API_KEY`, `TELEGRAM_BOT_TOKEN`, `OPENWEATHER_API_KEY`, `JWT_SECRET`
+- Variables de entorno: `GOOGLE_API_KEY`, `TELEGRAM_BOT_TOKEN`, `OPENWEATHER_API_KEY`, `JWT_SECRET`, en un `.env` que no se commitea
 
 ## Qué NO hacer
 - No inventar datos de perfil ni de plan si faltan métricas: rechazar la solicitud.
