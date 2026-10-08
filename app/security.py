@@ -1,5 +1,6 @@
 """Hash de contraseñas (Argon2id) y tokens de sesión (JWT)."""
 
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
 import jwt
@@ -13,6 +14,7 @@ _hasher = PasswordHasher(time_cost=2, memory_cost=19456, parallelism=1, type=Typ
 
 JWT_ALGORITHM = "HS256"
 TOKEN_TTL = timedelta(hours=2)
+MAX_SESSION_AGE = timedelta(days=7)
 
 
 def hash_password(password: str) -> str:
@@ -26,22 +28,46 @@ def verify_password(password_hash: str, password: str) -> bool:
         return False
 
 
-def create_token(user_id: int, now: datetime | None = None) -> str:
-    """Emite un token de sesión que vence a las 2 horas."""
+def create_token(
+    user_id: int, now: datetime | None = None, login_at: datetime | None = None
+) -> str:
+    """Emite un token de sesión que vence a las 2 horas.
+
+    login_at es el momento del login original; se conserva al renovar el token
+    para poder cortar la sesión a los 7 días (RF-02b).
+    """
     now = now or datetime.now(timezone.utc)
-    claims = {"sub": str(user_id), "iat": now, "exp": now + TOKEN_TTL}
+    claims = {
+        "sub": str(user_id),
+        "iat": now,
+        "exp": now + TOKEN_TTL,
+        "login_at": int((login_at or now).timestamp()),
+    }
     return jwt.encode(claims, config.jwt_secret(), algorithm=JWT_ALGORITHM)
 
 
-def decode_token(token: str) -> int | None:
-    """Devuelve el id del usuario, o None si el token es inválido o está vencido."""
+@dataclass(frozen=True)
+class Session:
+    user_id: int
+    login_at: datetime
+
+    def renewable(self, now: datetime | None = None) -> bool:
+        """True mientras no hayan pasado 7 días desde el login original."""
+        return (now or datetime.now(timezone.utc)) - self.login_at < MAX_SESSION_AGE
+
+
+def decode_token(token: str) -> Session | None:
+    """Devuelve la sesión del token, o None si es inválido o está vencido."""
     try:
         claims = jwt.decode(
             token,
             config.jwt_secret(),
             algorithms=[JWT_ALGORITHM],
-            options={"require": ["sub", "iat", "exp"]},
+            options={"require": ["sub", "iat", "exp", "login_at"]},
         )
-        return int(claims["sub"])
-    except (jwt.InvalidTokenError, ValueError):
+        return Session(
+            user_id=int(claims["sub"]),
+            login_at=datetime.fromtimestamp(claims["login_at"], timezone.utc),
+        )
+    except (jwt.InvalidTokenError, ValueError, TypeError, OverflowError, OSError):
         return None

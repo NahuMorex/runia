@@ -5,8 +5,8 @@ import pytest
 from fastapi import Depends, FastAPI
 from fastapi.testclient import TestClient
 
-from app import db
-from app.auth import current_user
+from app import config, db
+from app.auth import RENEWED_TOKEN_HEADER, current_user
 from app.security import create_token
 
 EMAIL = "milena@example.com"
@@ -117,11 +117,63 @@ def test_endpoint_autenticado_sin_token_invalido_o_vencido_devuelve_401(client, 
     user_id = registrar(client).json()["id"]
     hace_3_horas = datetime.now(timezone.utc) - timedelta(hours=3)
     vencido = create_token(user_id, now=hace_3_horas)
-    otra_firma = jwt.encode({"sub": str(user_id), "iat": 0, "exp": 9999999999}, "x" * 32, "HS256")
+    claims = {"sub": str(user_id), "iat": 0, "exp": 9999999999, "login_at": 0}
+    otra_firma = jwt.encode(claims, "x" * 32, "HS256")
+    sin_login_at = jwt.encode(
+        {"sub": str(user_id), "iat": hace_3_horas, "exp": hace_3_horas + timedelta(hours=6)},
+        config.jwt_secret(),
+        "HS256",
+    )
     sin_usuario = create_token(user_id + 1)
 
     assert protegido.get("/yo").status_code == 401
-    for token in ("no-es-un-jwt", vencido, otra_firma, sin_usuario):
+    for token in ("no-es-un-jwt", vencido, otra_firma, sin_usuario, sin_login_at):
         r = protegido.get("/yo", headers={"Authorization": f"Bearer {token}"})
         assert r.status_code == 401
         assert "id" not in r.json()
+
+
+# AC-05
+def test_request_autenticado_devuelve_token_renovado_por_2_horas(client, protegido):
+    user_id = registrar(client).json()["id"]
+    ahora = datetime.now(timezone.utc)
+    login_at = ahora - timedelta(days=7) + timedelta(minutes=1)
+    token = create_token(user_id, login_at=login_at)
+
+    r = protegido.get("/yo", headers={"Authorization": f"Bearer {token}"})
+
+    assert r.status_code == 200
+    renovado = jwt.decode(r.headers[RENEWED_TOKEN_HEADER], config.jwt_secret(), ["HS256"])
+    assert renovado["sub"] == str(user_id)
+    assert renovado["exp"] - renovado["iat"] == 2 * 60 * 60
+    assert abs(renovado["iat"] - ahora.timestamp()) < 5
+    # El login original se conserva: renovar no extiende el tope de 7 días.
+    assert renovado["login_at"] == int(login_at.timestamp())
+
+
+# AC-05
+def test_el_token_renovado_sirve_para_el_siguiente_request(client, protegido):
+    registrar(client)
+    token = client.post("/login", json={"email": EMAIL, "password": PASSWORD}).json()["access_token"]
+    renovado = protegido.get("/yo", headers={"Authorization": f"Bearer {token}"}).headers[
+        RENEWED_TOKEN_HEADER
+    ]
+    assert protegido.get("/yo", headers={"Authorization": f"Bearer {renovado}"}).status_code == 200
+
+
+# AC-05
+@pytest.mark.parametrize("antiguedad", [timedelta(days=7), timedelta(days=30)])
+def test_token_con_login_de_7_dias_o_mas_devuelve_401(client, protegido, antiguedad):
+    user_id = registrar(client).json()["id"]
+    token = create_token(user_id, login_at=datetime.now(timezone.utc) - antiguedad)
+
+    r = protegido.get("/yo", headers={"Authorization": f"Bearer {token}"})
+
+    assert r.status_code == 401
+    assert RENEWED_TOKEN_HEADER not in r.headers
+
+
+# AC-05: solo los requests válidos renuevan el token.
+def test_request_rechazado_no_devuelve_token_renovado(protegido):
+    r = protegido.get("/yo", headers={"Authorization": "Bearer no-es-un-jwt"})
+    assert r.status_code == 401 and RENEWED_TOKEN_HEADER not in r.headers

@@ -3,7 +3,7 @@
 import sqlite3
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Response, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, EmailStr, Field
 
@@ -12,6 +12,7 @@ from app.security import create_token, decode_token, hash_password, verify_passw
 
 router = APIRouter()
 _bearer = HTTPBearer(auto_error=False)
+RENEWED_TOKEN_HEADER = "X-Session-Token"
 
 # Se verifica contra este hash cuando el correo no existe, para que el login
 # tarde lo mismo y no revele qué correos están registrados.
@@ -64,14 +65,19 @@ def login(body: LoginRequest, conn: sqlite3.Connection = Depends(get_db)):
 
 
 def current_user(
+    response: Response,
     credentials: HTTPAuthorizationCredentials | None = Depends(_bearer),
     conn: sqlite3.Connection = Depends(get_db),
 ) -> sqlite3.Row:
-    """Dependencia para endpoints autenticados: responde 401 sin token válido (AC-73)."""
-    user_id = decode_token(credentials.credentials) if credentials else None
+    """Dependencia para endpoints autenticados.
+
+    Responde 401 sin token válido (AC-73) o si pasaron 7 días desde el login, y
+    devuelve un token renovado en el header X-Session-Token (AC-05).
+    """
+    session = decode_token(credentials.credentials) if credentials else None
     user = (
-        conn.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
-        if user_id is not None
+        conn.execute("SELECT * FROM users WHERE id = ?", (session.user_id,)).fetchone()
+        if session and session.renewable()
         else None
     )
     if user is None:
@@ -80,4 +86,5 @@ def current_user(
             "Token ausente, inválido o vencido",
             headers={"WWW-Authenticate": "Bearer"},
         )
+    response.headers[RENEWED_TOKEN_HEADER] = create_token(user["id"], login_at=session.login_at)
     return user
