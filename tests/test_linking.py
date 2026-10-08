@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from app import bot, db
+from app import bot
 from app.linking import (
     CODE_ALPHABET,
     CODE_LENGTH,
@@ -16,13 +16,6 @@ from app.linking import (
 
 CHAT = 1001
 OTRO_CHAT = 2002
-
-
-@pytest.fixture
-def conn(client):
-    c = db.connect()
-    yield c
-    c.close()
 
 
 def pedir_codigo(client, headers):

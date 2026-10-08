@@ -1,6 +1,7 @@
 import pytest
 from fastapi.testclient import TestClient
 
+from app import db
 from app.main import app
 
 
@@ -19,6 +20,14 @@ def env(tmp_path, monkeypatch):
 def client(env):
     with TestClient(app) as c:
         yield c
+
+
+@pytest.fixture
+def conn(client):
+    """Conexión directa a la base del test, con el esquema ya creado por la app."""
+    c = db.connect()
+    yield c
+    c.close()
 
 
 @pytest.fixture

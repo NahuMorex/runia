@@ -1,4 +1,4 @@
-"""Carga, edición y consulta del perfil del corredor (RF-03a a RF-03g, RF-18a)."""
+"""Carga, edición y consulta del perfil del corredor (RF-03a a RF-03g, RF-04, RF-18a)."""
 
 import re
 import sqlite3
@@ -19,6 +19,18 @@ MIN_WINDOW_MINUTES = 60
 _PACE_RE = re.compile(r"(\d{1,2}):([0-5]\d)")
 # Horas en zona horaria de Buenos Aires (RF-03f, RF-03g).
 HourMinute = Annotated[str, StringConstraints(pattern=r"^([01]\d|2[0-3]):[0-5]\d$")]
+
+MISSING_DATA_TEXT = "No hay datos sobre tu {campo} cargados en tu perfil"
+MISSING_CHAT_TEXT = "Tu cuenta no tiene un chat de Telegram vinculado"
+# Datos obligatorios en el orden de RF-04, con el nombre que lleva el mensaje de AC-09.
+_REQUIRED_FIELDS = (
+    ("nivel", ("level",)),
+    ("frecuencia", ("frequency",)),
+    ("distancia objetivo", ("target_km",)),
+    ("ciudad", ("city",)),
+    ("rango horario", ("window_start", "window_end")),
+    ("hora de envío", ("send_time",)),
+)
 
 
 def pace_to_seconds(pace: str) -> int:
@@ -87,6 +99,26 @@ def profile_from_row(user: sqlite3.Row) -> Profile:
         window_end=user["window_end"],
         send_time=user["send_time"],
     )
+
+
+def missing_plan_data(user: sqlite3.Row) -> str | None:
+    """Mensaje del primer dato obligatorio que falta para generar un plan (RF-04), o None."""
+    for campo, columns in _REQUIRED_FIELDS:
+        if any(user[column] is None for column in columns):
+            return MISSING_DATA_TEXT.format(campo=campo)
+    if user["telegram_chat_id"] is None:
+        return MISSING_CHAT_TEXT
+    # AC-10: el novato no necesita ritmo actual.
+    if user["level"] != "novato" and user["pace_seconds"] is None:
+        return MISSING_DATA_TEXT.format(campo="ritmo")
+    return None
+
+
+def require_plan_data(user: sqlite3.Row) -> None:
+    """Rechaza con 422 si falta algún dato obligatorio para generar un plan (AC-08, AC-09, AC-11)."""
+    error = missing_plan_data(user)
+    if error:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, error)
 
 
 @router.get("/profile", response_model=Profile)
