@@ -5,6 +5,7 @@ import pytest
 
 from app.guardrails import (
     Adjustment,
+    Block,
     InvalidPlan,
     Session,
     WeekSummary,
@@ -14,11 +15,13 @@ from app.guardrails import (
     check_structure,
     clamp_quality_pace,
     fastest_allowed_pace,
+    interval_seconds,
     limit_quality,
     load_caps,
     log_adjustments,
     novice_quality_allowed,
     remove_quality,
+    to_easy,
     weekly_km,
 )
 
@@ -28,12 +31,17 @@ RITMO = 360  # 6:00 min/km
 SEMANA_BUENA = WeekSummary(planned_km=20, completed=1)
 
 
+def suave(dia, *bloques):
+    return Session(LUNES + timedelta(days=dia), "suave", tuple(Block(*b) for b in bloques))
+
+
 def suaves(*kms):
-    return [Session(LUNES + timedelta(days=i), "suave", km) for i, km in enumerate(kms)]
+    return [suave(i, ("trote", km)) for i, km in enumerate(kms)]
 
 
 def calidad(dia, km=5.0, ritmo=350):
-    return Session(LUNES + timedelta(days=dia), "calidad", km, ritmo)
+    """Sesión de calidad con un único tramo de `km` y 90 segundos de recuperación."""
+    return Session(LUNES + timedelta(days=dia), "calidad", (Block("tramo", km, 90),), ritmo)
 
 
 def kms(sessions):
@@ -59,18 +67,24 @@ def test_un_plan_con_otra_cantidad_de_sesiones_se_rechaza(cantidad):
 
 def test_dos_sesiones_el_mismo_dia_se_rechazan():
     with pytest.raises(InvalidPlan):
-        check_structure([*suaves(3), Session(LUNES, "suave", 2)], 2, LUNES, DOMINGO)
+        check_structure([*suaves(3), suave(0, ("trote", 2))], 2, LUNES, DOMINGO)
 
 
 @pytest.mark.parametrize(
     "sesion",
     [
-        Session(LUNES - timedelta(days=1), "suave", 3),
-        Session(DOMINGO + timedelta(days=1), "suave", 3),
-        Session(LUNES, "fartlek", 3),
-        Session(LUNES, "suave", -1),
-        Session(LUNES, "suave", float("nan")),
-        Session(LUNES, "calidad", 3),  # sin ritmo objetivo
+        suave(-1, ("trote", 3)),
+        suave(7, ("trote", 3)),
+        Session(LUNES, "fartlek", (Block("trote", 3),)),
+        Session(LUNES, "suave", ()),
+        suave(0, ("bici", 3)),
+        suave(0, ("trote", -1)),
+        suave(0, ("trote", 0)),
+        suave(0, ("trote", float("nan"))),
+        suave(0, ("tramo", 1, 90)),  # una sesión suave no tiene tramos
+        Session(LUNES, "calidad", (Block("tramo", 1, 90),)),  # sin ritmo objetivo
+        Session(LUNES, "calidad", (Block("trote", 3),), 350),  # sin tramos
+        Session(LUNES, "calidad", (Block("tramo", 1),), 350),  # tramo sin recuperación
     ],
 )
 def test_una_sesion_invalida_se_rechaza(sesion):
@@ -84,11 +98,37 @@ def test_un_plan_parcial_solo_admite_dias_desde_la_generacion():
         check_structure(suaves(3), 1, jueves, DOMINGO)
 
 
+def test_una_sesion_de_calidad_con_tramos_y_una_de_caminata_y_trote_son_validas():
+    sesiones = [
+        suave(0, ("caminata", 0.3), ("trote", 0.2), ("caminata", 0.3), ("trote", 0.2)),
+        Session(
+            LUNES + timedelta(days=1),
+            "calidad",
+            (Block("trote", 2), Block("tramo", 1, 90), Block("tramo", 1, 0), Block("trote", 1)),
+            350,
+        ),
+    ]
+    check_structure(sesiones, 2, LUNES, DOMINGO)
+
+
 # --- Volumen (AC-18) ---
 
 
 def test_el_volumen_semanal_suma_solo_los_km_de_trote():
     assert weekly_km(suaves(1.5, 2.25, 3)) == 6.75
+
+
+# AC-18: los tramos son trote; la caminata no cuenta.
+def test_la_caminata_no_cuenta_en_el_volumen_y_los_tramos_si():
+    sesion = Session(
+        LUNES, "calidad", (Block("caminata", 1), Block("trote", 2), Block("tramo", 0.5, 60)), 350
+    )
+    assert sesion.jog_km == 2.5 and weekly_km([sesion]) == 2.5
+
+
+# AC-15: el tiempo objetivo del tramo sale de su distancia y del ritmo objetivo.
+def test_el_tiempo_objetivo_de_un_tramo_es_distancia_por_ritmo():
+    assert interval_seconds(0.4, 340) == 136
 
 
 # --- Novato sin calidad (AC-20) ---
@@ -130,6 +170,17 @@ def test_remove_quality_pasa_todas_las_sesiones_a_suave():
     assert kms(resultado) == [5.0, 2, 5.0]
     assert [a.rule for a in ajustes] == ["novato_sin_calidad"] * 2
     assert ajustes[0] == Adjustment("novato_sin_calidad", "calidad", "suave", LUNES)
+
+
+# AC-77
+def test_una_calidad_pasa_a_suave_como_un_unico_bloque_de_trote():
+    sesion = Session(
+        LUNES,
+        "calidad",
+        (Block("trote", 2), Block("tramo", 1, 90), Block("tramo", 1, 90), Block("trote", 1.5)),
+        340,
+    )
+    assert to_easy(sesion) == Session(LUNES, "suave", (Block("trote", 5.5),))
 
 
 # --- Una sola sesión de calidad (AC-21) ---
@@ -250,6 +301,61 @@ def test_el_volumen_semanal_se_recorta_en_proporcion_hasta_el_tope():
     resultado, ajustes = cap_weekly_km(suaves(10, 10, 5), 22, "tope_10")
     assert kms(resultado) == [8.8, 8.8, 4.4]
     assert ajustes == [Adjustment("tope_10", 25, 22)]
+
+
+# AC-76: se recorta cada bloque de trote; caminata, orden y cantidad de bloques no cambian.
+def test_el_recorte_por_sesion_multiplica_cada_bloque_de_trote_por_el_mismo_factor():
+    larga = suave(0, ("caminata", 0.5), ("trote", 6), ("caminata", 0.5), ("trote", 2))
+    corta = suave(1, ("trote", 3))
+    resultado, ajustes = cap_session_km([larga, corta], 5, "distancia_objetivo")
+    assert resultado == [
+        suave(0, ("caminata", 0.5), ("trote", 3.75), ("caminata", 0.5), ("trote", 1.25)),
+        corta,
+    ]
+    assert ajustes == [Adjustment("distancia_objetivo", 8, 5, LUNES)]
+
+
+# AC-76: los tramos se recortan, y la recuperación y el ritmo objetivo quedan iguales.
+def test_el_recorte_de_una_calidad_conserva_recuperaciones_y_ritmo():
+    sesion = Session(
+        LUNES,
+        "calidad",
+        (Block("trote", 2), Block("tramo", 1, 90), Block("tramo", 1, 60), Block("trote", 2)),
+        340,
+    )
+    (recortada,), _ = cap_session_km([sesion], 5, "distancia_objetivo")
+    assert recortada.blocks == (
+        Block("trote", 1.66),
+        Block("tramo", 0.83, 90),
+        Block("tramo", 0.83, 60),
+        Block("trote", 1.66),
+    )
+    assert recortada.pace_seconds == 340 and recortada.jog_km <= 5
+    assert interval_seconds(recortada.blocks[1].km, recortada.pace_seconds) == 282
+
+
+# AC-76: primero el tope por sesión y después el semanal, sobre el volumen ya recortado.
+def test_el_tope_por_sesion_se_aplica_antes_que_el_semanal():
+    propuesto = [suave(0, ("caminata", 1), ("trote", 4), ("trote", 4)), *suaves(0, 5, 5, 5)[1:]]
+    resultado, ajustes = apply_guardrails(
+        propuesto,
+        level="intermedio",
+        frequency=4,
+        target_km=5,
+        pace_seconds=RITMO,
+        previous_week=WeekSummary(15, completed=0),
+    )
+    assert ajustes == [
+        Adjustment("distancia_objetivo", 8, 5, LUNES),
+        Adjustment("sin_aumento", 20, 14.99),
+    ]
+    assert resultado[0].blocks == (Block("caminata", 1), Block("trote", 1.87), Block("trote", 1.87))
+    assert kms(resultado) == [3.74, 3.75, 3.75, 3.75]
+
+
+def test_un_recorte_que_deja_un_bloque_en_cero_se_rechaza():
+    with pytest.raises(InvalidPlan):
+        cap_weekly_km([suave(0, ("trote", 0.01), ("trote", 10))], 5, "tope_10")
 
 
 def test_el_recorte_semanal_nunca_supera_el_tope_por_redondeo():

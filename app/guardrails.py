@@ -1,4 +1,4 @@
-"""Guardarraíles duros de carga del plan semanal (RF-06b, RF-06d a RF-06i).
+"""Guardarraíles duros de carga del plan semanal (RF-06b, RF-06d a RF-06k).
 
 Son funciones puras, sin LLM ni base de datos: reciben las sesiones propuestas y
 devuelven las sesiones corregidas junto con los ajustes aplicados.
@@ -22,6 +22,10 @@ NOVICE_QUALITY_WEEKS = 3
 
 EASY = "suave"
 QUALITY = "calidad"
+WALK = "caminata"
+JOG = "trote"
+INTERVAL = "tramo"  # tramo al ritmo objetivo de una sesión de calidad
+JOG_KINDS = (JOG, INTERVAL)
 
 
 class InvalidPlan(ValueError):
@@ -29,11 +33,28 @@ class InvalidPlan(ValueError):
 
 
 @dataclass(frozen=True)
+class Block:
+    kind: str  # 'caminata', 'trote' o 'tramo'
+    km: float
+    recovery_seconds: int | None = None  # recuperación después del tramo, solo en tramos
+
+
+@dataclass(frozen=True)
 class Session:
     day: date
     kind: str  # 'suave' o 'calidad'
-    jog_km: float  # solo km de trote; la caminata no cuenta (AC-18)
+    blocks: tuple[Block, ...]
     pace_seconds: int | None = None  # ritmo objetivo por km, solo en sesiones de calidad
+
+    @property
+    def jog_km(self) -> float:
+        """Km de trote de la sesión, tramos incluidos; la caminata no cuenta (AC-18)."""
+        return _km(_jog_units(self))
+
+
+def interval_seconds(km: float, pace_seconds: int) -> int:
+    """Tiempo objetivo de un tramo: su distancia por el ritmo objetivo (AC-15, RF-06j)."""
+    return round(km * pace_seconds)
 
 
 @dataclass(frozen=True)
@@ -44,6 +65,7 @@ class WeekSummary:
     is_partial: bool = False
     completed: int = 0  # sesiones Completadas
     hard_cut: bool = False  # alguna sesión Parcial/Cortada con RPE >= 7
+    week_start: date | None = None  # lunes de la semana
 
 
 @dataclass(frozen=True)
@@ -73,9 +95,29 @@ def _km(units: int) -> float:
     return units / 100
 
 
+def _jog_units(session: Session) -> int:
+    return sum(_units(b.km) for b in session.blocks if b.kind in JOG_KINDS)
+
+
 def weekly_km(sessions: Sequence[Session]) -> float:
     """Volumen semanal: suma de los km de trote."""
-    return _km(sum(_units(s.jog_km) for s in sessions))
+    return _km(sum(_jog_units(s) for s in sessions))
+
+
+def _scale(session: Session, cap: int, total: int) -> Session:
+    """RF-06j: multiplica cada bloque o tramo de trote por cap/total, redondeando hacia abajo.
+
+    La caminata, las recuperaciones y el ritmo objetivo no cambian. La división
+    entera redondea hacia abajo, así que la suma nunca supera el tope.
+    """
+    blocks = []
+    for b in session.blocks:
+        if b.kind in JOG_KINDS:
+            b = replace(b, km=_km(_units(b.km) * cap // total))
+            if b.km == 0:
+                raise InvalidPlan(f"El recorte deja un bloque en 0 km el {session.day}")
+        blocks.append(b)
+    return replace(session, blocks=tuple(blocks))
 
 
 def check_structure(
@@ -91,10 +133,20 @@ def check_structure(
             raise InvalidPlan(f"La sesión del {s.day} está fuera de la semana del plan")
         if s.kind not in (EASY, QUALITY):
             raise InvalidPlan(f"Tipo de sesión desconocido: {s.kind}")
-        if not math.isfinite(s.jog_km) or s.jog_km < 0:
-            raise InvalidPlan(f"Km de trote inválidos en la sesión del {s.day}")
-        if s.kind == QUALITY and s.pace_seconds is None:
-            raise InvalidPlan(f"La sesión de calidad del {s.day} no tiene ritmo objetivo")
+        if not s.blocks:
+            raise InvalidPlan(f"La sesión del {s.day} no tiene bloques")
+        for b in s.blocks:
+            if b.kind not in (WALK, JOG, INTERVAL):
+                raise InvalidPlan(f"Tipo de bloque desconocido: {b.kind}")
+            if not math.isfinite(b.km) or _units(b.km) <= 0:
+                raise InvalidPlan(f"Distancia inválida en un bloque de la sesión del {s.day}")
+            if b.kind == INTERVAL and (b.recovery_seconds is None or b.recovery_seconds < 0):
+                raise InvalidPlan(f"Un tramo de la sesión del {s.day} no tiene recuperación")
+        intervals = sum(b.kind == INTERVAL for b in s.blocks)
+        if s.kind == QUALITY and (s.pace_seconds is None or not intervals):
+            raise InvalidPlan(f"La sesión de calidad del {s.day} no tiene ritmo objetivo o tramos")
+        if s.kind == EASY and intervals:
+            raise InvalidPlan(f"La sesión suave del {s.day} tiene tramos")
 
 
 def novice_quality_allowed(pace_seconds: int | None, recent_weeks: Sequence[WeekSummary]) -> bool:
@@ -112,15 +164,22 @@ def novice_quality_allowed(pace_seconds: int | None, recent_weeks: Sequence[Week
 
 def remove_quality(sessions: Sequence[Session]) -> tuple[list[Session], list[Adjustment]]:
     """AC-20: pasa a suave todas las sesiones de calidad."""
-    return _to_easy(sessions, keep=0, rule="novato_sin_calidad")
+    return _convert_quality(sessions, keep=0, rule="novato_sin_calidad")
 
 
 def limit_quality(sessions: Sequence[Session]) -> tuple[list[Session], list[Adjustment]]:
     """AC-21: deja como máximo una sesión de calidad, la primera de la semana."""
-    return _to_easy(sessions, keep=1, rule="una_sesion_de_calidad")
+    return _convert_quality(sessions, keep=1, rule="una_sesion_de_calidad")
 
 
-def _to_easy(
+def to_easy(session: Session) -> Session:
+    """RF-06k: reemplaza los tramos por un único bloque de trote con los mismos km de trote."""
+    walks = [b for b in session.blocks if b.kind == WALK]
+    blocks = (Block(JOG, session.jog_km), *walks)
+    return replace(session, kind=EASY, pace_seconds=None, blocks=blocks)
+
+
+def _convert_quality(
     sessions: Sequence[Session], keep: int, rule: str
 ) -> tuple[list[Session], list[Adjustment]]:
     kept = sorted(s.day for s in sessions if s.kind == QUALITY)[:keep]
@@ -128,7 +187,7 @@ def _to_easy(
     for s in sessions:
         if s.kind == QUALITY and s.day not in kept:
             adjustments.append(Adjustment(rule, QUALITY, EASY, s.day))
-            s = replace(s, kind=EASY, pace_seconds=None)
+            s = to_easy(s)
         result.append(s)
     return result, adjustments
 
@@ -190,12 +249,13 @@ def load_caps(
 def cap_session_km(
     sessions: Sequence[Session], cap_km: float, rule: str
 ) -> tuple[list[Session], list[Adjustment]]:
-    """Recorta cada sesión al tope por sesión (AC-61, AC-67)."""
+    """Recorta cada sesión al tope por sesión, sin tocar las demás (AC-61, AC-67, AC-76)."""
     result, adjustments = [], []
     for s in sessions:
-        if _units(s.jog_km) > _units(cap_km):
-            adjustments.append(Adjustment(rule, s.jog_km, cap_km, s.day))
-            s = replace(s, jog_km=cap_km)
+        if _jog_units(s) > _units(cap_km):
+            before = s.jog_km
+            s = _scale(s, _units(cap_km), _jog_units(s))
+            adjustments.append(Adjustment(rule, before, s.jog_km, s.day))
         result.append(s)
     return result, adjustments
 
@@ -203,12 +263,11 @@ def cap_session_km(
 def cap_weekly_km(
     sessions: Sequence[Session], cap_km: float, rule: str
 ) -> tuple[list[Session], list[Adjustment]]:
-    """Recorta el volumen semanal al tope, en proporción y sin piso mínimo (AC-18, AC-63)."""
-    total, cap = sum(_units(s.jog_km) for s in sessions), _units(cap_km)
+    """Recorta el volumen semanal al tope, con un mismo factor y sin piso mínimo (AC-18, AC-63)."""
+    total, cap = sum(_jog_units(s) for s in sessions), _units(cap_km)
     if total <= cap:
         return list(sessions), []
-    # La división entera redondea hacia abajo, así que la suma nunca supera el tope.
-    result = [replace(s, jog_km=_km(_units(s.jog_km) * cap // total)) for s in sessions]
+    result = [_scale(s, cap, total) for s in sessions]
     return result, [Adjustment(rule, _km(total), weekly_km(result))]
 
 
@@ -224,7 +283,10 @@ def apply_guardrails(
     recent_weeks: Sequence[WeekSummary] = (),
 ) -> tuple[list[Session], list[Adjustment]]:
     """Aplica todos los guardarraíles, en orden, a las sesiones propuestas por el modelo."""
-    current: list[Session] = [replace(s, jog_km=_km(_units(s.jog_km))) for s in sessions]
+    current: list[Session] = [
+        replace(s, blocks=tuple(replace(b, km=_km(_units(b.km))) for b in s.blocks))
+        for s in sessions
+    ]
     adjustments: list[Adjustment] = []
 
     def step(result: tuple[list[Session], list[Adjustment]]) -> None:
