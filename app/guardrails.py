@@ -149,6 +149,15 @@ def check_structure(
             raise InvalidPlan(f"La sesión suave del {s.day} tiene tramos")
 
 
+def check_walk_jog_blocks(sessions: Sequence[Session]) -> None:
+    """Falla si alguna sesión no alterna bloques de caminata y de trote (AC-14)."""
+    for s in sessions:
+        kinds = [b.kind for b in s.blocks]
+        alternates = all(a != b for a, b in zip(kinds, kinds[1:]))
+        if set(kinds) != {WALK, JOG} or not alternates:
+            raise InvalidPlan(f"La sesión del {s.day} no alterna bloques de caminata y trote")
+
+
 def novice_quality_allowed(pace_seconds: int | None, recent_weeks: Sequence[WeekSummary]) -> bool:
     """RF-06d: el novato solo recibe calidad con ritmo cargado y 3 semanas cerradas buenas.
 

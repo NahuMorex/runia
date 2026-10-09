@@ -11,6 +11,7 @@ from app.bot import start_bot, stop_bot
 from app.db import init_db
 from app.linking import router as linking_router
 from app.log import log_event
+from app.plan import router as plan_router
 from app.profile import router as profile_router
 
 
@@ -34,3 +35,4 @@ app = FastAPI(title="Runia", lifespan=lifespan)
 app.include_router(auth_router)
 app.include_router(profile_router)
 app.include_router(linking_router)
+app.include_router(plan_router)
