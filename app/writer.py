@@ -19,6 +19,9 @@ from app.log import log_event
 
 # RNF-01: la respuesta de fatiga, Gemini y el envío entran en 10 segundos.
 MESSAGE_TIMEOUT_SECONDS = 5
+# La API de Gemini rechaza con un 400 los plazos de menos de 10 segundos; el límite de
+# 5 segundos se aplica de este lado, al esperar la respuesta.
+GEMINI_MIN_DEADLINE_SECONDS = 10
 # Margen para que el modelo no quede al borde de las 150 palabras de AC-27.
 PROMPT_MAX_WORDS = 110
 
@@ -30,7 +33,10 @@ Te paso los datos de la sesión de hoy y redactás el mensaje, respetando estas 
 alerta climática y el día alternativo, tal como están escritos.
 - Si los datos dicen "Clima no disponible: seguí las pautas base de ritmo e hidratación." o \
 "No hay una alternativa disponible esta semana", copiá esa frase textual.
-- No hagas preguntas ni ofrezcas reprogramar la sesión.
+- Las frases de la lista "Copiá textual" tienen que aparecer tal cual, sin cambiarles ni una palabra.
+- Empezá con "Hola." y nada más como saludo.
+- No hagas preguntas ni ofrezcas reprogramar la sesión: el mensaje no lleva signos de pregunta.
+- No agregues indicaciones ni consejos que no estén en los datos.
 - No des consejo médico ni de lesiones.
 - Texto plano, sin markdown ni asteriscos, de {PROMPT_MAX_WORDS} palabras como máximo.
 """
@@ -40,7 +46,9 @@ _MARKDOWN = ("*", "#", "`")
 
 
 def build_prompt(daily: DailyMessage) -> str:
-    return f"Datos de la sesión de hoy:\n{daily.text}"
+    """Los datos de la plantilla y, aparte, los fragmentos que la redacción tiene que conservar."""
+    required = "\n".join(f"- {fragment}" for fragment in daily.required)
+    return f"Datos de la sesión de hoy:\n{daily.text}\n\nCopiá textual:\n{required}"
 
 
 def rejection_reason(text: str | None, daily: DailyMessage) -> str | None:
@@ -65,7 +73,7 @@ def rejection_reason(text: str | None, daily: DailyMessage) -> str | None:
 def _call_gemini(prompt: str) -> str | None:
     client = genai.Client(
         api_key=config.google_api_key(),
-        http_options=types.HttpOptions(timeout=MESSAGE_TIMEOUT_SECONDS * 1000),
+        http_options=types.HttpOptions(timeout=GEMINI_MIN_DEADLINE_SECONDS * 1000),
     )
     response = client.models.generate_content(
         model=config.GEMINI_MODEL,

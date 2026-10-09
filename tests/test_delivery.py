@@ -86,7 +86,8 @@ def gemini(monkeypatch):
             raise estado["respuesta"]
         if estado["respuesta"] is not None:
             return estado["respuesta"]
-        return "Hola, va tu sesión. " + prompt.split("\n", 1)[1].replace("\n", " ")
+        datos = prompt.split("\n", 1)[1].split("\n\nCopiá textual:")[0]
+        return "Hola, va tu sesión. " + datos.replace("\n", " ")
 
     monkeypatch.setattr(writer, "_call_gemini", falso)
     return estado

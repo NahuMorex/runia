@@ -59,14 +59,27 @@ def gemini(monkeypatch):
 # --- Prompt ---
 
 
-def test_el_prompt_lleva_los_datos_de_la_plantilla():
-    assert build_prompt(DIARIO) == "Datos de la sesión de hoy:\n" + DIARIO.text
+def test_el_prompt_lleva_los_datos_de_la_plantilla_y_las_frases_a_copiar():
+    prompt = build_prompt(DIARIO)
+    assert prompt.startswith("Datos de la sesión de hoy:\n" + DIARIO.text + "\n\nCopiá textual:\n")
+    assert prompt.endswith(
+        "- calidad\n- 07:00\n- 09:00\n- 5:45\n"
+        "- 2 km trote, 2 x 0,4 km a ritmo objetivo (en 2:18, recuperación 90 s)\n"
+        "- probabilidad de lluvia de 80%\n- jueves 8/10"
+    )
+
+
+def test_el_prompt_pide_copiar_suave_recuperacion_con_fatiga_alta():
+    assert "- suave/recuperación\n" in build_prompt(build_daily(CALIDAD, *RANGO, fatigue=9))
 
 
 def test_las_instrucciones_prohiben_inventar_datos_preguntar_y_dar_consejo_medico():
     instrucciones = writer.SYSTEM_INSTRUCTION
     assert "Usá solo los datos que recibís" in instrucciones
     assert "No hagas preguntas ni ofrezcas reprogramar" in instrucciones
+    assert "no lleva signos de pregunta" in instrucciones
+    assert 'Empezá con "Hola." y nada más como saludo' in instrucciones
+    assert "No agregues indicaciones ni consejos que no estén en los datos" in instrucciones
     assert "No des consejo médico ni de lesiones" in instrucciones
     assert "Clima no disponible: seguí las pautas base de ritmo e hidratación." in instrucciones
     assert "No hay una alternativa disponible esta semana" in instrucciones
@@ -214,3 +227,20 @@ def test_si_gemini_no_responde_a_tiempo_se_envia_la_plantilla(monkeypatch, capsy
 
 def test_el_tiempo_limite_de_la_redaccion_es_de_5_segundos():
     assert writer.MESSAGE_TIMEOUT_SECONDS == 5
+
+
+def test_el_plazo_que_se_le_pasa_a_gemini_no_baja_de_10_segundos(monkeypatch):
+    # La API rechaza con un 400 los plazos de menos de 10 segundos.
+    recibido = {}
+
+    class ClienteFalso:
+        def __init__(self, api_key, http_options):
+            recibido["timeout_ms"] = http_options.timeout
+            self.models = self
+
+        def generate_content(self, **kwargs):
+            return type("Respuesta", (), {"text": "hola"})()
+
+    monkeypatch.setattr(writer.genai, "Client", ClienteFalso)
+    assert writer._call_gemini("prompt") == "hola"
+    assert recibido["timeout_ms"] == 10_000
