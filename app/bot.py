@@ -2,13 +2,15 @@
 
 import asyncio
 import logging
+import time
 from datetime import datetime
 
 from telegram import Bot, Update
 from telegram.error import InvalidToken, TelegramError
 from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters
 
-from app import config, db, fatigue
+from app import config, db, delivery, fatigue
+from app.daily import word_count
 from app.fatigue import Check, ReplyStatus
 from app.linking import LinkResult, redeem_link_code
 from app.log import log_event
@@ -34,6 +36,8 @@ FATIGUE_QUESTION_TEXT = (
 FATIGUE_RETRY_TEXT = "No entendí tu respuesta. Decime tu fatiga con un número entero del 1 al 10."
 # Cada cuánto se revisa si a alguien le llegó la hora de envío o se le venció la espera.
 TICK_SECONDS = 30
+# RNF-01: 10 usuarios simultáneos.
+CONCURRENT_UPDATES = 10
 
 
 def link_chat(chat_id: int, args: list[str]) -> str:
@@ -57,13 +61,31 @@ async def link_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
 
 async def deliver_daily(bot: Bot, check: Check, fatigue_level: int | None) -> None:
-    """Punto donde se arma y envía el mensaje diario; `fatigue_level` es None si no respondió."""
+    """Arma y envía el mensaje diario (RF-08); `fatigue_level` es None si no respondió."""
+    started = time.monotonic()
+    # El clima y Gemini son llamadas bloqueantes: van en un hilo para no frenar al resto (RNF-01).
+    text = await asyncio.to_thread(delivery.prepare_message, check, fatigue_level)
+    if text is None:
+        return
+    try:
+        await bot.send_message(chat_id=check.chat_id, text=text)
+    except TelegramError as error:
+        log_event(
+            "external_error",
+            level=logging.ERROR,
+            servicio="telegram",
+            motivo="mensaje_diario",
+            tipo=type(error).__name__,
+            user_id=check.user_id,
+        )
+        return
     log_event(
-        "fatiga_resuelta",
+        "mensaje_diario",
         user_id=check.user_id,
         fecha=check.day.isoformat(),
         fatiga=fatigue_level,
-        motivo="respuesta" if fatigue_level is not None else "sin_respuesta",
+        palabras=word_count(text),
+        duracion_ms=round((time.monotonic() - started) * 1000),
     )
 
 
@@ -98,8 +120,17 @@ async def expire_fatigue(bot: Bot, now: datetime | None = None) -> None:
         expired = fatigue.close_expired_checks(conn, now or fatigue.now_utc())
     finally:
         conn.close()
-    for check in expired:
-        await deliver_daily(bot, check, None)
+    results = await asyncio.gather(
+        *(deliver_daily(bot, check, None) for check in expired), return_exceptions=True
+    )
+    for check, result in zip(expired, results):
+        if isinstance(result, Exception):
+            log_event(
+                "mensaje_diario_error",
+                level=logging.ERROR,
+                tipo=type(result).__name__,
+                user_id=check.user_id,
+            )
 
 
 async def handle_text(bot: Bot, chat_id: int, text: str, now: datetime | None = None) -> str | None:
@@ -143,7 +174,13 @@ async def on_error(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 def build_application() -> Application:
-    application = Application.builder().token(config.telegram_bot_token()).build()
+    # RNF-01: las respuestas de varios usuarios se atienden a la vez, no en fila.
+    application = (
+        Application.builder()
+        .token(config.telegram_bot_token())
+        .concurrent_updates(CONCURRENT_UPDATES)
+        .build()
+    )
     # Solo chats privados: un grupo no puede quedar vinculado a una cuenta.
     private = filters.ChatType.PRIVATE
     application.add_handler(CommandHandler("start", start_command, filters=private))

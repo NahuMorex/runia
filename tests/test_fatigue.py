@@ -12,22 +12,13 @@ from telegram.ext import MessageHandler
 
 from app import bot, fatigue
 from app.fatigue import ReplyStatus, close_expired_checks, open_due_checks, parse_fatigue, record_reply
+from tests.conftest import PERFIL_CORREDOR as PERFIL
 
 BA = ZoneInfo("America/Argentina/Buenos_Aires")
 LUNES = date(2026, 10, 5)
 MARTES = LUNES + timedelta(days=1)
 CHAT = 1001
 OTRO_CHAT = 2002
-PERFIL = {
-    "level": "intermedio",
-    "frequency": 3,
-    "target_km": 21.1,
-    "pace": "6:00",
-    "city": "Rosario",
-    "window_start": "07:00",
-    "window_end": "09:00",
-    "send_time": "06:30",
-}
 
 
 def a_las(hora, minuto=0, dia=LUNES):
@@ -36,37 +27,6 @@ def a_las(hora, minuto=0, dia=LUNES):
 
 def registros(capsys):
     return [json.loads(linea) for linea in capsys.readouterr().out.strip().splitlines()]
-
-
-@pytest.fixture
-def corredor(client, auth, conn):
-    """Crea un usuario con perfil, chat vinculado y sesiones planificadas; devuelve sus headers."""
-
-    def _corredor(email="pepe@example.com", chat=CHAT, sesiones=(LUNES,), perfil=PERFIL):
-        headers = auth(email)
-        assert client.put("/profile", json=perfil, headers=headers).status_code == 200
-        user_id = conn.execute("SELECT id FROM users WHERE email = ?", (email,)).fetchone()[0]
-        conn.execute("UPDATE users SET telegram_chat_id = ? WHERE id = ?", (chat, user_id))
-        plan_id = conn.execute(
-            "INSERT INTO plans (user_id, week_start, planned_km, created_at) VALUES (?, ?, 5, ?)",
-            (user_id, LUNES.isoformat(), a_las(0).isoformat()),
-        ).lastrowid
-        for dia in sesiones:
-            conn.execute(
-                "INSERT INTO sessions (plan_id, user_id, date, kind, jog_km, detail) "
-                "VALUES (?, ?, ?, 'suave', 5, ?)",
-                (plan_id, user_id, dia.isoformat(), '{"blocks": [{"kind": "trote", "km": 5}]}'),
-            )
-        conn.commit()
-        return headers
-
-    return _corredor
-
-
-@pytest.fixture
-def telegram():
-    """Bot falso que guarda los mensajes enviados; nunca se sale a la red."""
-    return SimpleNamespace(send_message=AsyncMock())
 
 
 @pytest.fixture
@@ -108,18 +68,18 @@ def test_cualquier_otra_cosa_no_es_una_fatiga_valida(texto):
 
 
 def test_a_la_hora_de_envio_se_abre_la_pregunta_del_dia(corredor, conn):
-    corredor()
+    corredor(sesiones=(LUNES,))
     (pregunta,) = open_due_checks(conn, a_las(6, 30))
     assert (pregunta.chat_id, pregunta.day, pregunta.asked_at) == (CHAT, LUNES, a_las(6, 30))
 
 
 def test_antes_de_la_hora_de_envio_no_se_pregunta(corredor, conn):
-    corredor()
+    corredor(sesiones=(LUNES,))
     assert open_due_checks(conn, a_las(6, 29)) == []
 
 
 def test_no_se_pregunta_dos_veces_el_mismo_dia(corredor, conn):
-    corredor()
+    corredor(sesiones=(LUNES,))
     assert len(open_due_checks(conn, a_las(6, 30))) == 1
     assert open_due_checks(conn, a_las(6, 31)) == []
     record_reply(conn, CHAT, "5", a_las(6, 40))
@@ -134,31 +94,31 @@ def test_un_dia_sin_sesion_planificada_no_se_pregunta(corredor, conn):
 
 def test_sin_plan_o_sin_chat_vinculado_no_se_pregunta(corredor, conn):
     corredor(sesiones=())
-    corredor(email="mich@example.com", chat=None)
+    corredor(email="mich@example.com", chat=None, sesiones=(LUNES,))
     assert open_due_checks(conn, a_las(6, 30)) == []
 
 
 def test_si_la_hora_de_envio_ya_paso_se_pregunta_mientras_dure_el_rango_horario(corredor, conn):
-    corredor()
+    corredor(sesiones=(LUNES,))
     assert len(open_due_checks(conn, a_las(8, 59))) == 1
 
 
 def test_terminado_el_rango_horario_ya_no_se_pregunta(corredor, conn):
-    corredor()
+    corredor(sesiones=(LUNES,))
     assert open_due_checks(conn, a_las(9, 0)) == []
     assert open_due_checks(conn, a_las(23, 0)) == []
 
 
 def test_cada_usuario_recibe_su_pregunta_a_su_hora(corredor, conn):
-    corredor()
-    corredor(email="mich@example.com", chat=OTRO_CHAT, perfil={**PERFIL, "send_time": "08:00"})
+    corredor(sesiones=(LUNES,))
+    corredor(email="mich@example.com", chat=OTRO_CHAT, sesiones=(LUNES,), perfil={**PERFIL, "send_time": "08:00"})
     assert [c.chat_id for c in open_due_checks(conn, a_las(6, 30))] == [CHAT]
     assert [c.chat_id for c in open_due_checks(conn, a_las(8, 0))] == [OTRO_CHAT]
 
 
 # AC-71: la hora de envío es la vigente en el perfil.
 def test_la_pregunta_usa_la_hora_de_envio_vigente(client, corredor, conn):
-    headers = corredor()
+    headers = corredor(sesiones=(LUNES,))
     assert client.put("/profile", json={"send_time": "08:15"}, headers=headers).status_code == 200
     assert open_due_checks(conn, a_las(6, 30)) == []
     assert len(open_due_checks(conn, a_las(8, 15))) == 1
@@ -168,7 +128,7 @@ def test_la_pregunta_usa_la_hora_de_envio_vigente(client, corredor, conn):
 
 
 def test_una_respuesta_valida_cierra_la_pregunta_con_la_fatiga(corredor, conn):
-    corredor()
+    corredor(sesiones=(LUNES,))
     (pregunta,) = open_due_checks(conn, a_las(6, 30))
 
     respuesta = record_reply(conn, CHAT, "8", a_las(6, 45))
@@ -179,7 +139,7 @@ def test_una_respuesta_valida_cierra_la_pregunta_con_la_fatiga(corredor, conn):
 
 
 def test_una_respuesta_invalida_deja_la_pregunta_abierta(corredor, conn):
-    corredor()
+    corredor(sesiones=(LUNES,))
     open_due_checks(conn, a_las(6, 30))
 
     assert record_reply(conn, CHAT, "bastante cansado", a_las(6, 45)).status is ReplyStatus.INVALID
@@ -188,7 +148,7 @@ def test_una_respuesta_invalida_deja_la_pregunta_abierta(corredor, conn):
 
 
 def test_sin_pregunta_pendiente_un_mensaje_no_es_una_respuesta(corredor, conn):
-    corredor()
+    corredor(sesiones=(LUNES,))
     assert record_reply(conn, CHAT, "5", a_las(6, 0)).status is ReplyStatus.NO_PENDING
     open_due_checks(conn, a_las(6, 30))
     record_reply(conn, CHAT, "5", a_las(6, 40))
@@ -197,8 +157,8 @@ def test_sin_pregunta_pendiente_un_mensaje_no_es_una_respuesta(corredor, conn):
 
 
 def test_la_respuesta_de_un_chat_no_cierra_la_pregunta_de_otro(corredor, conn):
-    corredor()
-    corredor(email="mich@example.com", chat=OTRO_CHAT)
+    corredor(sesiones=(LUNES,))
+    corredor(email="mich@example.com", chat=OTRO_CHAT, sesiones=(LUNES,))
     open_due_checks(conn, a_las(6, 30))
 
     respuesta = record_reply(conn, OTRO_CHAT, "3", a_las(6, 40))
@@ -213,7 +173,7 @@ def test_la_respuesta_de_un_chat_no_cierra_la_pregunta_de_otro(corredor, conn):
 
 
 def test_la_espera_vence_a_las_2_horas_de_la_primera_pregunta(corredor, conn):
-    corredor()
+    corredor(sesiones=(LUNES,))
     (pregunta,) = open_due_checks(conn, a_las(6, 30))
 
     assert close_expired_checks(conn, a_las(8, 29)) == []
@@ -224,14 +184,14 @@ def test_la_espera_vence_a_las_2_horas_de_la_primera_pregunta(corredor, conn):
 
 # AC-75: volver a preguntar no reinicia la espera.
 def test_una_respuesta_invalida_no_reinicia_la_espera(corredor, conn):
-    corredor()
+    corredor(sesiones=(LUNES,))
     open_due_checks(conn, a_las(6, 30))
     record_reply(conn, CHAT, "mmm", a_las(8, 20))
     assert len(close_expired_checks(conn, a_las(8, 30))) == 1
 
 
 def test_una_respuesta_despues_de_las_2_horas_ya_no_cuenta(corredor, conn):
-    corredor()
+    corredor(sesiones=(LUNES,))
     open_due_checks(conn, a_las(6, 30))
     assert record_reply(conn, CHAT, "9", a_las(8, 30)).status is ReplyStatus.NO_PENDING
     assert len(close_expired_checks(conn, a_las(8, 30))) == 1
@@ -239,7 +199,7 @@ def test_una_respuesta_despues_de_las_2_horas_ya_no_cuenta(corredor, conn):
 
 
 def test_una_pregunta_respondida_no_vence(corredor, conn):
-    corredor()
+    corredor(sesiones=(LUNES,))
     open_due_checks(conn, a_las(6, 30))
     record_reply(conn, CHAT, "4", a_las(7, 0))
     assert close_expired_checks(conn, a_las(9, 0)) == []
@@ -250,7 +210,7 @@ def test_una_pregunta_respondida_no_vence(corredor, conn):
 
 
 def test_el_bot_pregunta_la_fatiga_a_la_hora_de_envio(corredor, telegram, capsys):
-    corredor()
+    corredor(sesiones=(LUNES,))
     asyncio.run(bot.tick(telegram, a_las(6, 29)))
     assert enviados(telegram) == []
 
@@ -264,7 +224,7 @@ def test_el_bot_pregunta_la_fatiga_a_la_hora_de_envio(corredor, telegram, capsys
 
 
 def test_si_telegram_falla_al_preguntar_se_registra_y_se_reintenta(corredor, telegram, conn, capsys):
-    corredor()
+    corredor(sesiones=(LUNES,))
     telegram.send_message.side_effect = TimedOut()
     asyncio.run(bot.tick(telegram, a_las(6, 30)))
     assert conn.execute("SELECT COUNT(*) FROM fatigue_checks").fetchone()[0] == 0
@@ -280,7 +240,7 @@ def test_si_telegram_falla_al_preguntar_se_registra_y_se_reintenta(corredor, tel
 def test_ante_una_respuesta_invalida_el_bot_vuelve_a_preguntar_sin_emitir_el_mensaje(
     corredor, telegram, entregas
 ):
-    corredor()
+    corredor(sesiones=(LUNES,))
     asyncio.run(bot.tick(telegram, a_las(6, 30)))
 
     respuesta = asyncio.run(bot.handle_text(telegram, CHAT, "muy cansado", a_las(6, 40)))
@@ -291,7 +251,7 @@ def test_ante_una_respuesta_invalida_el_bot_vuelve_a_preguntar_sin_emitir_el_men
 
 # AC-47
 def test_con_una_respuesta_valida_el_bot_sigue_con_el_mensaje_diario(corredor, telegram, entregas):
-    corredor()
+    corredor(sesiones=(LUNES,))
     asyncio.run(bot.tick(telegram, a_las(6, 30)))
     asyncio.run(bot.handle_text(telegram, CHAT, "nada", a_las(6, 35)))
 
@@ -303,7 +263,7 @@ def test_con_una_respuesta_valida_el_bot_sigue_con_el_mensaje_diario(corredor, t
 
 # AC-47: pasadas 2 horas sin respuesta, sigue sin ajustar por fatiga.
 def test_a_las_2_horas_sin_respuesta_el_bot_sigue_sin_fatiga(corredor, telegram, entregas):
-    corredor()
+    corredor(sesiones=(LUNES,))
     asyncio.run(bot.tick(telegram, a_las(6, 30)))
     asyncio.run(bot.handle_text(telegram, CHAT, "después te digo", a_las(7, 0)))
     asyncio.run(bot.tick(telegram, a_las(8, 29)))
@@ -318,13 +278,13 @@ def test_a_las_2_horas_sin_respuesta_el_bot_sigue_sin_fatiga(corredor, telegram,
 
 
 def test_un_mensaje_sin_pregunta_pendiente_no_tiene_respuesta(corredor, telegram, entregas):
-    corredor()
+    corredor(sesiones=(LUNES,))
     assert asyncio.run(bot.handle_text(telegram, CHAT, "hola", a_las(6, 0))) is None
     assert entregas == []
 
 
 def test_el_handler_de_texto_responde_en_el_chat(corredor, telegram, conn, entregas):
-    corredor()
+    corredor(sesiones=(LUNES,))
     # El handler usa la hora real: la pregunta se abre a mano, recién hecha.
     conn.execute(
         "INSERT INTO fatigue_checks (user_id, date, asked_at) SELECT id, ?, ? FROM users",
