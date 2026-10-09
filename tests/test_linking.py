@@ -4,6 +4,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
+from telegram.ext import CommandHandler
 
 from app import bot
 from app.linking import (
@@ -156,5 +157,6 @@ def test_el_bot_explica_el_uso_si_no_recibe_un_unico_codigo(client, args):
 def test_el_bot_registra_los_comandos_solo_para_chats_privados(monkeypatch):
     monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "123456:token-de-prueba")
     handlers = bot.build_application().handlers[0]
+    handlers = [h for h in handlers if isinstance(h, CommandHandler)]
     assert {c for h in handlers for c in h.commands} == {"start", "vincular"}
     assert all(h.filters is not None for h in handlers)
