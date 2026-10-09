@@ -239,6 +239,9 @@ def post_plan(
     try:
         _save_plan(conn, user["id"], plan)
     except sqlite3.IntegrityError:
-        # Otro request generó el plan de esta semana mientras se esperaba al modelo.
+        # Solo es un 409 si otro request generó el plan de esta semana mientras se esperaba
+        # al modelo; cualquier otro choque al guardar es un error y no se disfraza.
+        if not _has_plan(conn, user["id"], week_start):
+            raise
         raise HTTPException(status.HTTP_409_CONFLICT, PLAN_EXISTS_TEXT)
     return plan

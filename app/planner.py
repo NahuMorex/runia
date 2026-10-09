@@ -25,6 +25,8 @@ from app.profile import pace_to_seconds, seconds_to_pace
 GEMINI_TIMEOUT_SECONDS = 20
 # El prompt solo lleva resúmenes semanales, y de pocas semanas, para no gastar tokens.
 MAX_PROMPT_WEEKS = 4
+# Orientación para el modelo, no un guardarraíl: quien recién empieza no trota 1 km seguido.
+NOVICE_JOG_BLOCK_KM = 0.4
 WEEKDAYS = ("lunes", "martes", "miércoles", "jueves", "viernes", "sábado", "domingo")
 
 SYSTEM_INSTRUCTION = """\
@@ -114,6 +116,11 @@ def build_prompt(request: PlanRequest) -> str:
         f"- Máximo {request.caps.weekly_km:g} km de trote en toda la semana",
         f"- Sesiones de calidad: {quality}",
     ]
+    if request.level == "novato":
+        lines.append(
+            f"- Cada bloque de trote es corto, de {NOVICE_JOG_BLOCK_KM:g} km como máximo, "
+            "separado del siguiente por un bloque de caminata"
+        )
     if request.level == "novato" and not request.weeks:
         # AC-14
         lines.append(

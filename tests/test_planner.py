@@ -109,6 +109,14 @@ def test_el_prompt_de_una_novata_en_su_primera_semana_no_admite_calidad_y_pide_b
     assert "Sin semanas anteriores" in prompt
 
 
+def test_el_prompt_pide_bloques_de_trote_cortos_solo_a_los_novatos():
+    pedido = "Cada bloque de trote es corto, de 0.4 km como máximo"
+    assert pedido in build_prompt(NOVATA)
+    con_historial = PlanRequest(**{**NOVATA.__dict__, "weeks": (WeekSummary(4, week_start=LUNES),)})
+    assert pedido in build_prompt(con_historial)
+    assert pedido not in build_prompt(INTERMEDIO)
+
+
 def test_el_prompt_solo_lleva_resumenes_de_las_ultimas_4_semanas():
     semanas = tuple(
         WeekSummary(20 + i, completed=i, week_start=LUNES - timedelta(weeks=i + 1)) for i in range(6)

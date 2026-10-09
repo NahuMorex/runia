@@ -1,4 +1,5 @@
 import json
+import sqlite3
 from datetime import date, timedelta
 
 import pytest
@@ -210,6 +211,41 @@ def test_con_un_plan_para_la_semana_en_curso_devuelve_409(client, usuario, gemin
     hoy(JUEVES)
     assert client.post("/plan", headers=headers).status_code == 409
     assert len(planes(conn)) == 1 and len(gemini["prompts"]) == 1
+
+
+# AC-58: otro request crea el plan de la semana mientras se espera al modelo.
+def test_si_el_plan_aparece_durante_la_generacion_devuelve_409(client, usuario, hoy, conn, monkeypatch):
+    def gemini_lento(prompt):
+        conn.execute(
+            "INSERT INTO plans (user_id, week_start, planned_km, created_at) VALUES (1, ?, 9, 'x')",
+            (str(LUNES),),
+        )
+        conn.commit()
+        return json.dumps({"sessions": [trote(0, 4), trote(2, 4), trote(4, 4)]})
+
+    monkeypatch.setattr(planner, "_call_gemini", gemini_lento)
+    r = client.post("/plan", headers=usuario())
+    assert r.status_code == 409
+    assert [p["planned_km"] for p in planes(conn)] == [9]
+    assert conn.execute("SELECT COUNT(*) FROM sessions").fetchone()[0] == 0
+
+
+# Un choque al guardar que no es por el plan de la semana no se informa como 409.
+def test_un_error_de_guardado_que_no_es_por_plan_existente_no_devuelve_409(client, usuario, gemini, hoy, conn):
+    headers = usuario()
+    # Sesión huérfana, como la que deja un borrado manual de plans sin claves foráneas.
+    conn.execute("PRAGMA foreign_keys = OFF")
+    conn.execute(
+        "INSERT INTO sessions (plan_id, user_id, date, kind, jog_km, detail) VALUES (1, 1, ?, 'suave', 2, '{}')",
+        (str(LUNES),),
+    )
+    conn.commit()
+    gemini["respuesta"] = [trote(0, 4), trote(2, 4), trote(4, 4)]
+
+    with pytest.raises(sqlite3.IntegrityError):
+        client.post("/plan", headers=headers)
+    assert planes(conn) == []
+    assert conn.execute("SELECT COUNT(*) FROM sessions").fetchone()[0] == 1
 
 
 def test_el_plan_de_otro_usuario_no_bloquea_el_propio(client, usuario, gemini, hoy, conn):
