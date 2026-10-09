@@ -29,6 +29,12 @@ def registros(capsys):
     return [json.loads(linea) for linea in capsys.readouterr().out.strip().splitlines()]
 
 
+@pytest.fixture(autouse=True)
+def sin_clima(monkeypatch):
+    """Acá se prueba solo la pregunta de fatiga; el clima se prueba en test_delivery.py."""
+    monkeypatch.setattr(bot.delivery, "evaluate_weather", lambda check: None)
+
+
 @pytest.fixture
 def entregas(monkeypatch):
     """Reemplaza el envío del mensaje diario y guarda con qué fatiga se pidió."""

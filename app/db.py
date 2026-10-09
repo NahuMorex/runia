@@ -60,6 +60,7 @@ CREATE TABLE IF NOT EXISTS fatigue_checks (
     asked_at TEXT NOT NULL,  -- primera pregunta; la espera de 2 horas cuenta desde acá (AC-75)
     fatigue INTEGER,  -- respuesta de 1 a 10; NULL si la espera venció sin respuesta
     closed_at TEXT,  -- NULL mientras se espera la respuesta
+    weather TEXT,  -- JSON con la evaluación climática hecha antes de preguntar (AC-23)
     UNIQUE (user_id, date)
 );
 """
@@ -77,6 +78,10 @@ def init_db() -> None:
     conn = connect()
     try:
         conn.executescript(SCHEMA)
+        # Bases creadas antes de que la evaluación climática se guardara con la pregunta.
+        columns = {r["name"] for r in conn.execute("PRAGMA table_info(fatigue_checks)")}
+        if "weather" not in columns:
+            conn.execute("ALTER TABLE fatigue_checks ADD COLUMN weather TEXT")
         conn.commit()
     finally:
         conn.close()

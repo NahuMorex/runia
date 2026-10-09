@@ -1,7 +1,8 @@
 """Mensaje diario de punta a punta (RF-08): sesión del día, clima, fatiga y redacción.
 
-Con la pregunta de fatiga ya resuelta, arma el texto a enviar usando los valores
-vigentes del perfil (AC-71). El envío por Telegram está en app/bot.py.
+El clima se evalúa a la hora de envío, antes de preguntar la fatiga (AC-23), y se
+guarda con la pregunta. Con la fatiga ya resuelta se arma el texto a enviar. Siempre
+se usan los valores vigentes del perfil (AC-71). El envío por Telegram está en app/bot.py.
 """
 
 import json
@@ -11,6 +12,7 @@ from datetime import date
 
 from app import climate, db, weather, writer
 from app.climate import Alert
+from app.weather import WindowForecast
 from app.daily import adjust_for_fatigue, build_daily
 from app.fatigue import Check
 from app.guardrails import Block, Session
@@ -66,6 +68,54 @@ def check_weather(user: sqlite3.Row, day: date) -> tuple[Alert | None, bool]:
     return alert, True
 
 
+def weather_to_json(alert: Alert | None, available: bool) -> str:
+    payload: dict = {"available": available, "alert": None}
+    if alert is not None:
+        payload["alert"] = {
+            "reasons": list(alert.reasons),
+            "rain_percent": alert.forecast.rain_percent,
+            "temp_c": alert.forecast.temp_c,
+            "alternative": alert.alternative.isoformat() if alert.alternative else None,
+        }
+    return json.dumps(payload)
+
+
+def weather_from_json(text: str | None) -> tuple[Alert | None, bool]:
+    """La evaluación guardada con la pregunta; sin evaluación guardada, el clima no está disponible."""
+    if not text:
+        return None, False
+    payload = json.loads(text)
+    alert = payload["alert"]
+    if alert is None:
+        return None, payload["available"]
+    alternative = alert["alternative"]
+    return (
+        Alert(
+            reasons=tuple(alert["reasons"]),
+            forecast=WindowForecast(alert["rain_percent"], alert["temp_c"]),
+            alternative=date.fromisoformat(alternative) if alternative else None,
+        ),
+        True,
+    )
+
+
+def evaluate_weather(check: Check) -> None:
+    """Evalúa el clima de la sesión del día y lo guarda con la pregunta, antes de enviarla (AC-23)."""
+    conn = db.connect()
+    try:
+        user = conn.execute("SELECT * FROM users WHERE id = ?", (check.user_id,)).fetchone()
+        if user is None:
+            return
+        alert, available = check_weather(user, check.day)
+        conn.execute(
+            "UPDATE fatigue_checks SET weather = ? WHERE id = ?",
+            (weather_to_json(alert, available), check.id),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
 def prepare_message(check: Check, fatigue_level: int | None) -> str | None:
     """Texto del mensaje diario de la pregunta ya resuelta, o None si no hay nada que enviar.
 
@@ -77,6 +127,9 @@ def prepare_message(check: Check, fatigue_level: int | None) -> str | None:
         row = conn.execute(
             "SELECT date, kind, detail FROM sessions WHERE user_id = ? AND date = ?",
             (check.user_id, check.day.isoformat()),
+        ).fetchone()
+        saved = conn.execute(
+            "SELECT weather FROM fatigue_checks WHERE id = ?", (check.id,)
         ).fetchone()
     finally:
         conn.close()
@@ -101,7 +154,7 @@ def prepare_message(check: Check, fatigue_level: int | None) -> str | None:
             fecha=check.day.isoformat(),
             user_id=check.user_id,
         )
-    alert, weather_available = check_weather(user, check.day)
+    alert, weather_available = weather_from_json(saved["weather"] if saved else None)
     daily = build_daily(
         planned, user["window_start"], user["window_end"], fatigue_level, alert, weather_available
     )

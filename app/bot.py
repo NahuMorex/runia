@@ -89,28 +89,39 @@ async def deliver_daily(bot: Bot, check: Check, fatigue_level: int | None) -> No
     )
 
 
+async def _ask(bot: Bot, check: Check) -> None:
+    conn = db.connect()
+    try:
+        try:
+            # AC-23: el clima se evalúa a la hora de envío, antes de preguntar la fatiga.
+            await asyncio.to_thread(delivery.evaluate_weather, check)
+            await bot.send_message(chat_id=check.chat_id, text=FATIGUE_QUESTION_TEXT)
+        except Exception as error:
+            # Sin pregunta enviada no hay espera: se descarta y se reintenta en la próxima vuelta.
+            fatigue.discard_check(conn, check)
+            is_telegram = isinstance(error, TelegramError)
+            log_event(
+                "external_error" if is_telegram else "pregunta_de_fatiga_error",
+                level=logging.ERROR,
+                servicio="telegram" if is_telegram else None,
+                motivo="pregunta_de_fatiga",
+                tipo=type(error).__name__,
+                user_id=check.user_id,
+            )
+        else:
+            log_event("pregunta_de_fatiga", user_id=check.user_id, fecha=check.day.isoformat())
+    finally:
+        conn.close()
+
+
 async def ask_fatigue(bot: Bot, now: datetime | None = None) -> None:
     """Pregunta la fatiga a quienes les llegó la hora de envío y tienen sesión hoy (AC-47)."""
     conn = db.connect()
     try:
-        for check in fatigue.open_due_checks(conn, now or fatigue.now_utc()):
-            try:
-                await bot.send_message(chat_id=check.chat_id, text=FATIGUE_QUESTION_TEXT)
-            except TelegramError as error:
-                # Sin pregunta enviada no hay espera: se descarta y se reintenta en la próxima vuelta.
-                fatigue.discard_check(conn, check)
-                log_event(
-                    "external_error",
-                    level=logging.ERROR,
-                    servicio="telegram",
-                    motivo="pregunta_de_fatiga",
-                    tipo=type(error).__name__,
-                    user_id=check.user_id,
-                )
-            else:
-                log_event("pregunta_de_fatiga", user_id=check.user_id, fecha=check.day.isoformat())
+        checks = fatigue.open_due_checks(conn, now or fatigue.now_utc())
     finally:
         conn.close()
+    await asyncio.gather(*(_ask(bot, check) for check in checks))
 
 
 async def expire_fatigue(bot: Bot, now: datetime | None = None) -> None:

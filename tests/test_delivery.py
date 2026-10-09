@@ -112,7 +112,8 @@ def test_pregunta_respuesta_clima_redaccion_y_envio(corredor, telegram, clima, g
 
     asyncio.run(bot.tick(telegram, a_las(6, 30)))
     assert enviados(telegram) == [(CHAT, bot.FATIGUE_QUESTION_TEXT)]
-    assert clima["ciudades"] == [] and gemini["prompts"] == []  # nada hasta la respuesta (AC-47)
+    # AC-23: el clima ya se evaluó; el mensaje no se redacta hasta la respuesta (AC-47).
+    assert clima["ciudades"] == ["Rosario"] and gemini["prompts"] == []
 
     asyncio.run(bot.handle_text(telegram, CHAT, "5", a_las(6, 40)))
 
@@ -199,7 +200,7 @@ def test_una_respuesta_invalida_no_dispara_el_mensaje_diario(corredor, telegram,
     corredor(sesiones=(LUNES,))
     asyncio.run(bot.tick(telegram, a_las(6, 30)))
     assert asyncio.run(bot.handle_text(telegram, CHAT, "cansado", a_las(6, 40))) == bot.FATIGUE_RETRY_TEXT
-    assert len(enviados(telegram)) == 1 and clima["ciudades"] == []
+    assert len(enviados(telegram)) == 1 and gemini["prompts"] == []
 
 
 # --- Clima (AC-12, AC-13, AC-23, AC-24, AC-64) ---
@@ -283,27 +284,90 @@ def test_si_el_pronostico_no_trae_datos_de_hoy_el_mensaje_dice_clima_no_disponib
 
 def test_el_mensaje_usa_la_ciudad_y_el_rango_horario_vigentes(client, corredor, telegram, clima, gemini):
     headers = corredor(sesiones=(LUNES,))
-    asyncio.run(bot.tick(telegram, a_las(6, 30)))
     cambio = {"city": "Mendoza", "window_start": "18:00", "window_end": "20:00"}
     assert client.put("/profile", json=cambio, headers=headers).status_code == 200
     # Con el rango nuevo, la lluvia de la mañana ya no cuenta y la de la tarde sí.
-    tarde = int(a_las(18).timestamp())
     clima["respuesta"] = httpx.Response(
         200,
         json={
             "list": [
                 {"dt": int(a_las(9).timestamp()), "main": {"temp": 20}, "pop": 0.1},
-                {"dt": tarde, "main": {"temp": 20}, "pop": 0.9},
+                {"dt": int(a_las(18).timestamp()), "main": {"temp": 20}, "pop": 0.9},
             ]
         },
     )
 
-    asyncio.run(bot.handle_text(telegram, CHAT, "4", a_las(6, 40)))
+    mensaje = flujo(telegram, respuesta="4")
 
-    mensaje = enviados(telegram)[-1][1]
     assert clima["ciudades"] == ["Mendoza"]
     assert "Horario sugerido: 18:00 a 20:00." in mensaje
     assert "probabilidad de lluvia de 90%" in mensaje
+
+
+# --- Clima antes de la pregunta de fatiga (AC-23) ---
+
+
+def test_el_clima_se_evalua_antes_de_preguntar_la_fatiga_y_no_se_vuelve_a_consultar(
+    corredor, telegram, clima, gemini, conn
+):
+    corredor(sesiones=(LUNES,))
+    clima["respuesta"] = pronostico(LLUVIA, BUENO)
+    orden = []
+    telegram.send_message.side_effect = lambda **kwargs: orden.append(("telegram", list(clima["ciudades"])))
+
+    asyncio.run(bot.tick(telegram, a_las(6, 30)))
+
+    assert orden == [("telegram", ["Rosario"])]  # al preguntar, el clima ya estaba consultado
+    guardado = json.loads(conn.execute("SELECT weather FROM fatigue_checks").fetchone()[0])
+    assert guardado == {
+        "available": True,
+        "alert": {
+            "reasons": ["lluvia"],
+            "rain_percent": 80,
+            "temp_c": 20.0,
+            "alternative": "2026-10-06",
+        },
+    }
+
+    # El pronóstico cambia después de la pregunta: el mensaje usa la evaluación de la hora de envío.
+    clima["respuesta"] = pronostico(BUENO, BUENO)
+    asyncio.run(bot.handle_text(telegram, CHAT, "5", a_las(6, 40)))
+
+    assert clima["ciudades"] == ["Rosario"]
+    mensaje = telegram.send_message.call_args_list[-1].kwargs["text"]
+    assert "probabilidad de lluvia de 80%" in mensaje and "martes 6/10" in mensaje
+
+
+def test_sin_evaluacion_guardada_el_mensaje_dice_clima_no_disponible(corredor, telegram, clima, gemini, conn):
+    corredor(sesiones=(LUNES,))
+    asyncio.run(bot.tick(telegram, a_las(6, 30)))
+    conn.execute("UPDATE fatigue_checks SET weather = NULL")
+    conn.commit()
+
+    asyncio.run(bot.handle_text(telegram, CHAT, "5", a_las(6, 40)))
+
+    assert CLIMA_NO_DISPONIBLE in enviados(telegram)[-1][1]
+
+
+def test_un_fallo_inesperado_al_evaluar_el_clima_descarta_la_pregunta_y_se_reintenta(
+    corredor, telegram, clima, gemini, conn, monkeypatch, capsys
+):
+    corredor(sesiones=(LUNES,))
+    original = bot.delivery.evaluate_weather
+
+    def falla(check):
+        raise RuntimeError("fallo inesperado")
+
+    monkeypatch.setattr(bot.delivery, "evaluate_weather", falla)
+    asyncio.run(bot.tick(telegram, a_las(6, 30)))
+    assert enviados(telegram) == []
+    assert conn.execute("SELECT COUNT(*) FROM fatigue_checks").fetchone()[0] == 0
+    (registro,) = registros(capsys, "pregunta_de_fatiga_error")
+    assert registro["tipo"] == "RuntimeError"
+
+    monkeypatch.setattr(bot.delivery, "evaluate_weather", original)
+    asyncio.run(bot.tick(telegram, a_las(6, 31)))
+    assert enviados(telegram) == [(CHAT, bot.FATIGUE_QUESTION_TEXT)]
 
 
 # --- Aislamiento entre usuarios ---
@@ -319,7 +383,8 @@ def test_cada_usuario_recibe_solo_su_sesion_en_su_chat(corredor, telegram, clima
     mensajes = [(c, t) for c, t in enviados(telegram) if t != bot.FATIGUE_QUESTION_TEXT]
     ((chat, mensaje),) = mensajes
     assert chat == 2002 and "3 x (0,4 km caminata + 0,4 km trote)" in mensaje
-    assert "5:45" not in mensaje and clima["ciudades"] == ["Salta"]
+    assert "5:45" not in mensaje
+    assert sorted(clima["ciudades"]) == ["Rosario", "Salta"]  # el clima de cada uno, con su ciudad
 
 
 # --- Telegram ---
@@ -365,9 +430,8 @@ def test_diez_respuestas_simultaneas_se_atienden_a_la_vez(corredor, telegram, cl
     for chat in chats:
         corredor(email=f"corredor{chat}@example.com", chat=chat, sesiones=(LUNES,))
     asyncio.run(bot.tick(telegram, a_las(6, 30)))
-    respuesta_clima, redactar = clima["respuesta"], writer._call_gemini
-    monkeypatch.setattr(weather, "_fetch", lambda city: time.sleep(0.3) or respuesta_clima)
-    monkeypatch.setattr(writer, "_call_gemini", lambda prompt: time.sleep(0.3) or redactar(prompt))
+    redactar = writer._call_gemini
+    monkeypatch.setattr(writer, "_call_gemini", lambda prompt: time.sleep(0.5) or redactar(prompt))
 
     async def todos():
         await asyncio.gather(*(bot.handle_text(telegram, c, "5", a_las(6, 40)) for c in chats))
@@ -378,7 +442,7 @@ def test_diez_respuestas_simultaneas_se_atienden_a_la_vez(corredor, telegram, cl
 
     entregados = [c for c, t in enviados(telegram) if t != bot.FATIGUE_QUESTION_TEXT]
     assert sorted(entregados) == chats
-    # En fila serían 6 segundos (10 x 0,6 s); a la vez, muy por debajo de los 10 de RNF-01.
+    # En fila serían 5 segundos (10 x 0,5 s); a la vez, muy por debajo de los 10 de RNF-01.
     assert duracion < 3
 
 

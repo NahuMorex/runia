@@ -3,6 +3,7 @@ from datetime import timedelta
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
+import httpx
 import pytest
 from fastapi.testclient import TestClient
 
@@ -31,6 +32,16 @@ def env(tmp_path, monkeypatch):
     # Sin token de Telegram la app no levanta el bot: los tests no salen a la red.
     monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
     monkeypatch.setenv("OPENWEATHER_API_KEY", "test-openweather")
+
+
+@pytest.fixture(autouse=True)
+def sin_red(monkeypatch):
+    """Red de seguridad: un test que no mockea el clima recibe un error en vez de salir a la red."""
+
+    def sin_conexion(*args, **kwargs):
+        raise httpx.ConnectError("los tests no salen a la red")
+
+    monkeypatch.setattr(httpx, "get", sin_conexion)
 
 
 @pytest.fixture

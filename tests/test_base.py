@@ -18,6 +18,25 @@ def test_init_db_crea_las_tablas_y_es_idempotente():
     assert {"users", "link_codes", "plans", "sessions"} <= tablas
 
 
+def test_init_db_agrega_la_columna_de_clima_a_una_base_anterior():
+    conn = db.connect()
+    conn.executescript(
+        "CREATE TABLE users (id INTEGER PRIMARY KEY);"
+        "CREATE TABLE fatigue_checks (id INTEGER PRIMARY KEY, user_id INTEGER, date TEXT, "
+        "asked_at TEXT, fatigue INTEGER, closed_at TEXT);"
+        "INSERT INTO fatigue_checks (user_id, date, asked_at) VALUES (1, '2026-10-05', 'x');"
+    )
+    conn.close()
+
+    db.init_db()
+    db.init_db()
+
+    conn = db.connect()
+    fila = conn.execute("SELECT date, weather FROM fatigue_checks").fetchone()
+    conn.close()
+    assert tuple(fila) == ("2026-10-05", None)
+
+
 def test_la_base_aplica_claves_foraneas():
     db.init_db()
     conn = db.connect()
